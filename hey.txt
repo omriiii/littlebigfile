@@ -1,0 +1,12 @@
+TODO
+- Find optimal model size, where with a scoring algo of
+  SIZE_OF_FILE / (SIZE_OF_NEURAL_NET + SIZE_OF_ERROR_DATA_TABLE)
+- Implement error data table portion
+
+
+------
+
+Considerations
+- Speed?
+- Amount of data writes? (to not waste SSD)
+- Energy consumption saved?

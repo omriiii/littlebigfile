@@ -150,8 +150,12 @@ def chunkFileToTrainingData(file_bytearray: bytearray,
         raise NotImplementedError(":(")
     y = np.array(file_bits)
     """
-
-    y = np.array([[round(random.random())]    for i in range(1024*1024)])
+    pass
+    BYTE = 8
+    KILO = 1024
+    MEGABYTE = BYTE * KILO * KILO
+    GIGABYTE = MEGABYTE * KILO
+    y = np.array([[round(random.random())] for i in range(MEGABYTE)], dtype='float32')
 
 
     # Create x
@@ -160,15 +164,16 @@ def chunkFileToTrainingData(file_bytearray: bytearray,
 
     if user_fourier_series_coeffs:
         a0, COS_COEFFS, SIN_COEFFS = fourier_series_coeff_numpy(lambda arg:arg, 1, fourier_series_terms)
-    else:
-        COS_COEFFS = [1]*fourier_series_terms
-        SIN_COEFFS = [1]*fourier_series_terms
 
-    for k, coeffs in enumerate(zip(COS_COEFFS, SIN_COEFFS)):
-        cos_coeff, sin_coeff = coeffs
+        for k, coeffs in enumerate(zip(COS_COEFFS, SIN_COEFFS)):
+            cos_coeff, sin_coeff = coeffs
+            for x in X:
+                x.append(cos_coeff*cos(2*pi*(k+1)*x[0]))
+                x.append(sin_coeff*sin(2*pi*(k+1)*x[0]))
+    else:
         for x in X:
-            x.append(cos_coeff*cos(2*pi*(k+1)*x[0]))
-            x.append(sin_coeff*sin(2*pi*(k+1)*x[0]))
+            x.extend([cos(2 * pi * k * x[0]) for k in range(1, fourier_series_terms)])
+            x.extend([sin(2 * pi * k * x[0]) for k in range(1, fourier_series_terms)])
 
     X = np.array(X)
 

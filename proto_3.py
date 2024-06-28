@@ -54,6 +54,9 @@ class FileBytearrayAsDataset(Dataset):
         self.fourier_series_terms = fourier_series_terms
         self.samples_cnt = len(self.file_bytearray)
 
+
+        """
+
         #
         # Create x
 
@@ -61,7 +64,6 @@ class FileBytearrayAsDataset(Dataset):
         # eg. 6 sample_cnt would yield array of [0, 0.2, 0.4, 0.6, 0.8, 1]
         self.x = [i / (self.samples_cnt - 1) for i in range(self.samples_cnt)]
 
-        """
         # Append fourier terms
         if not lazy_eval:
             for k in range(fourier_series_terms):
@@ -76,7 +78,7 @@ class FileBytearrayAsDataset(Dataset):
         #self.y = torch.from_numpy(y.astype(np.float32))
 
     def __len__(self):
-        return len(self.x)
+        return self.samples_cnt
 
     def __getitem__(self, idx):
 
@@ -85,7 +87,7 @@ class FileBytearrayAsDataset(Dataset):
 
         # Our intermediate x
         # Remember, x here is just some float from 0 to 1
-        x = self.x[idx]
+        #x = idx/(self.samples_cnt-1)
 
         """
         for k in range(self.fourier_series_terms):
@@ -94,12 +96,24 @@ class FileBytearrayAsDataset(Dataset):
 
         ret_x = torch.from_numpy(np.array(ret_x, dtype='float32'))
         """
+        # Backwards fourier...
+        use_absolutes = True
 
         # Create a tensor with indices
-        k = torch.arange(1, self.fourier_series_terms + 1, device=DEVICE)
-        angles = 2 * np.pi * k * x
+        k = torch.arange(2, self.fourier_series_terms + 2, device=DEVICE)
+        #k = torch.arange((self.samples_cnt-1), (self.samples_cnt-1)-self.fourier_series_terms, step=-1, device=DEVICE)/(self.samples_cnt-1)
+        angles = 2 * np.pi * (1/k) * idx
+
         cos_values = torch.cos(angles)
         sin_values = torch.sin(angles)
+        """
+        if use_absolutes:  
+            cos_values = (torch.cos(angles)             / 2) + 0.5
+            sin_values = (torch.sin(angles - (np.pi/2)) / 2) + 0.5
+        else:
+            cos_values = torch.cos(angles)
+            sin_values = torch.sin(angles)
+        """
 
         # Interleave cosine and sine values
         ret_x = torch.empty(2 * self.fourier_series_terms, device=DEVICE)
@@ -246,13 +260,13 @@ if __name__ == '__main__':
 
     # lol. override fname
     #fname = '/home/omri/Downloads/Concept Art.zip' # 100mb
-    #fname = '/home/omri/Downloads/02 Justice - Sure You Will.wav' # 50mb
-    fname = '/home/omri/Downloads/JUSTICE_RIPOFF_4.mpga' # 1.8mb
+    fname = '/home/omri/Downloads/02 Justice - Sure You Will.wav' # 50mb
+    #fname = '/home/omri/Downloads/JUSTICE_RIPOFF_4.mpga' # 1.8mb
     file_bytearray = getFileByteArray(fname)
 
 
     train(file_bytearray=file_bytearray,
-          fourier_series_terms=50000,
+          fourier_series_terms=500,
           #bits_predicted_per_neural_net_inference=1,
           layer_cnt=3,
           layer_size=1024,

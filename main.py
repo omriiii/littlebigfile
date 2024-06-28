@@ -73,7 +73,7 @@ class NeuralNetwork(nn.Module):
 def chunkFileToTrainingData(file_bytearray: bytearray,
                             chunk_size: int) -> (np.array, np.array):
     # debug!
-    fake_debug_length = 1000
+    fake_debug_length = 10000
     x = np.array([[i / (fake_debug_length-1)] for i in range(fake_debug_length)])
     y = np.array([[round(random.random())]    for i in range(fake_debug_length)])
 
@@ -148,7 +148,7 @@ if __name__ == '__main__':
     train(x=x,
           y=y,
           layer_cnt=6,
-          layer_size=64,
+          layer_size=512,
           epochs=1000,
           learning_rate=0.00075,
           batch_size=64,
