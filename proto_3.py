@@ -22,6 +22,8 @@ DEVICE = (
 
 print(f"Script using {DEVICE} device")
 
+
+
 # Print iterations progress
 def printProgressBar(iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
     """
@@ -48,34 +50,29 @@ def printProgressBar(iteration, total, prefix = '', suffix = '', decimals = 1, l
 class FileBytearrayAsDataset(Dataset):
     def __init__(self,
                  file_bytearray: bytearray,
-                 fourier_series_terms: int,
-                 lazy_eval:bool=True):
+                 incorrectness_mask: bytearray,
+                 k_values: list,
+                 x_value_distributions: list,
+                 output_size: int):
+
         self.file_bytearray = file_bytearray
-        self.fourier_series_terms = fourier_series_terms
-        self.samples_cnt = len(self.file_bytearray)
+        self.samples_cnt = len(self.file_bytearray)*8
+        self.x_value_distributions = x_value_distributions
+        self.incorrectness_mask = incorrectness_mask
+        self.output_size = output_size
 
-
-        """
 
         #
-        # Create x
+        # Create static x values
+        self.static_xs = []
+        for k in k_values:
+            if k <= self.output_size:
+                self.static_xs.extend([np.sin(2 * x * np.pi / k).astype('float32') for x in range(k)])
+                self.static_xs.extend([np.cos(2 * x * np.pi / k).astype('float32') for x in range(k)])
+                self.static_xs = list(set(self.static_xs))
 
-        # [0, 1] samples as floats
-        # eg. 6 sample_cnt would yield array of [0, 0.2, 0.4, 0.6, 0.8, 1]
-        self.x = [i / (self.samples_cnt - 1) for i in range(self.samples_cnt)]
-
-        # Append fourier terms
-        if not lazy_eval:
-            for k in range(fourier_series_terms):
-                for x in X:
-                    x.append(cos(2 * pi * (k + 1) * x[0]))
-                    x.append(sin(2 * pi * (k + 1) * x[0]))
-
-
-        self.x = torch.from_numpy(np.array(, dtype='float32'))
-        """
-
-        #self.y = torch.from_numpy(y.astype(np.float32))
+        self.static_xs = torch.from_numpy(np.array(self.static_xs, dtype='float32'))
+        self.ks = [k for k in k_values if k > self.output_size]
 
     def __len__(self):
         return self.samples_cnt
@@ -83,53 +80,25 @@ class FileBytearrayAsDataset(Dataset):
     def __getitem__(self, idx):
 
         #
-        # CALCULATE X
+        # CALCULATE DYNAMIC X
+        # TODO: CUSTOM X SAMPLE DISTRIBUTION (INSTEAD OF range(self.output_soze)) HERE!
+        x = []
+        x_offset = idx*self.output_size
+        for k in self.ks:
+            x.extend([np.sin((2 * (x_offset+x) * np.pi) / k) for x in self.x_value_distributions])
+            x.extend([np.cos((2 * (x_offset+x) * np.pi) / k) for x in self.x_value_distributions])
 
-        # Our intermediate x
-        # Remember, x here is just some float from 0 to 1
-        #x = idx/(self.samples_cnt-1)
-
-        """
-        for k in range(self.fourier_series_terms):
-            ret_x.append(cos(2 * pi * (k + 1) * x))
-            ret_x.append(sin(2 * pi * (k + 1) * x))
-
-        ret_x = torch.from_numpy(np.array(ret_x, dtype='float32'))
-        """
-        # Backwards fourier...
-        use_absolutes = True
-
-        # Create a tensor with indices
-        k = torch.arange(2, self.fourier_series_terms + 2, device=DEVICE)
-        #k = torch.arange((self.samples_cnt-1), (self.samples_cnt-1)-self.fourier_series_terms, step=-1, device=DEVICE)/(self.samples_cnt-1)
-        angles = 2 * np.pi * (1/k) * idx
-
-        cos_values = torch.cos(angles)
-        sin_values = torch.sin(angles)
-        """
-        if use_absolutes:  
-            cos_values = (torch.cos(angles)             / 2) + 0.5
-            sin_values = (torch.sin(angles - (np.pi/2)) / 2) + 0.5
-        else:
-            cos_values = torch.cos(angles)
-            sin_values = torch.sin(angles)
-        """
-
-        # Interleave cosine and sine values
-        ret_x = torch.empty(2 * self.fourier_series_terms, device=DEVICE)
-        ret_x[0::2] = cos_values
-        ret_x[1::2] = sin_values
-
-        ###########33
+        ret_x = torch.cat((self.static_xs, torch.from_numpy(np.array(x, dtype='float32'))))
+        print(f"x took {time.time()-s}")
 
         #
         #   CALCULATE Y
-        byte_index = math.floor(idx/8)
-        byte = self.file_bytearray[byte_index]
-        bit_location = idx%8
-        bit = (byte >> bit_location) & 1
+        # This is a condensed call of the commented code below
+        y =      [(self.file_bytearray    [math.floor((idx+i)/8)] >> ((idx+i)%8)) & 1 for i in range(self.output_size)]
+        y_mask = [(self.incorrectness_mask[math.floor((idx+i)/8)] >> ((idx+i)%8)) & 1 for i in range(self.output_size)]
 
-        ret_y = torch.from_numpy(np.array([bit], dtype='float32'))
+        ret_y = (torch.from_numpy(np.array(y, dtype='float32')),
+                 torch.from_numpy(np.array(y_mask, dtype='float32')))
 
         return ret_x, ret_y
 
@@ -144,14 +113,16 @@ class NeuralNetwork(nn.Module):
         super().__init__()
         self.flatten = nn.Flatten()
 
-        layers = [nn.Linear(input_size, layer_size), nn.LeakyReLU()]
-        for _ in range(layer_cnt - 1):
-            layers.extend([nn.Linear(layer_size, layer_size), nn.LeakyReLU()])
+        if layer_cnt > 0:
+            layers = [nn.Linear(input_size, layer_size), nn.LeakyReLU()]
 
-        if output_size == 2:
-            layers.extend([nn.Linear(layer_size, output_size), nn.Softmax(dim=-1)])
-        elif output_size == 1:
+            for _ in range(layer_cnt - 1):
+                layers.extend([nn.Linear(layer_size, layer_size), nn.LeakyReLU()])
+
             layers.extend([nn.Linear(layer_size, output_size), nn.Sigmoid()])
+        else:
+            layers = nn.Sequential(nn.Linear(input_size, output_size),
+                                   nn.Sigmoid())
 
         self.linear_relu_stack = nn.Sequential(*layers)
         """
@@ -171,10 +142,18 @@ class NeuralNetwork(nn.Module):
         logits = self.linear_relu_stack(x)
         return logits
 
-from numpy import ones_like, cos, pi, sin, allclose
+
+import os
+import secrets
+
+def generateRandomBytearray(num_bytes):
+    return bytearray(secrets.token_bytes(num_bytes))
 
 def train(file_bytearray: bytearray,
-          fourier_series_terms: int,
+          bits_to_focus_on_mask: bytearray,
+          output_size: int,
+          x_value_distributions: list,
+          k_values: list,
           layer_cnt: int,
           layer_size: int,
           epochs: int,
@@ -183,7 +162,11 @@ def train(file_bytearray: bytearray,
           shuffle: bool):
 
     dataset = FileBytearrayAsDataset(file_bytearray=file_bytearray,
-                                     fourier_series_terms=fourier_series_terms)
+                                     incorrectness_mask=bits_to_focus_on_mask,
+                                     x_value_distributions=x_value_distributions,
+                                     k_values=k_values,
+                                     output_size=output_size)
+
     print(f"Training on {len(dataset)} samples")
     print(f"Batch size {batch_size}")
 
@@ -196,12 +179,11 @@ def train(file_bytearray: bytearray,
 
     print("Creating MLP...")
     mlp = NeuralNetwork(input_size=temp_sample[0].shape[0],
-                        output_size=1,
+                        output_size=output_size,
                         layer_cnt=layer_cnt,
                         layer_size=layer_size).to(DEVICE)
 
-
-
+    print(mlp)
     optimizer = torch.optim.Adam(mlp.parameters(), lr=learning_rate)
     loss_fn = nn.MSELoss()
 
@@ -212,17 +194,21 @@ def train(file_bytearray: bytearray,
 
         for batch, (batch_x, batch_y) in enumerate(dataloader):
             batch_x = batch_x.to(DEVICE)
-            batch_y = batch_y.to(DEVICE)
+            batch_y_truth, batch_y_mask = batch_y
+            batch_y_mask = batch_y_mask.to(DEVICE)
+            batch_y_truth = batch_y_truth.to(DEVICE)
+
 
             pred = mlp(batch_x)
 
-            loss = loss_fn(pred, batch_y)
-            correct_labels += torch.sum(torch.round(pred) == batch_y)
+            loss = loss_fn(pred * batch_y_mask, batch_y_truth * batch_y_mask)
+            correct_labels += torch.sum(torch.round(pred) * batch_y_mask == (batch_y_truth * batch_y_mask))
 
             # Backpropagation
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
+            print(f"backprop took {time.time()-t}")
 
             time_elapsed = time.time() - start_timestamp
             seconds_per_batch = time_elapsed / max(1, batch)
@@ -231,6 +217,7 @@ def train(file_bytearray: bytearray,
                              total=math.ceil(len(dataset) / batch_size),
                              length=20,
                              suffix=f" | Time left: {datetime.timedelta(seconds=seconds_per_batch*remaining_batches)}")
+
 
 
         accurecy = correct_labels / len(dataset)
@@ -260,16 +247,30 @@ if __name__ == '__main__':
 
     # lol. override fname
     #fname = '/home/omri/Downloads/Concept Art.zip' # 100mb
-    fname = '/home/omri/Downloads/02 Justice - Sure You Will.wav' # 50mb
+    #fname = '/home/omri/Downloads/02 Justice - Sure You Will.wav' # 50mb
     #fname = '/home/omri/Downloads/JUSTICE_RIPOFF_4.mpga' # 1.8mb
-    file_bytearray = getFileByteArray(fname)
+    file_bytearray = getFileByteArray("file")
+
+
+    bits_to_focus_on_mask = [int(random.random() > (2/3)) for _ in range(len(file_bytearray)*8)]
+
+    from itertools import zip_longest  # izip_longest python2
+    it = iter(map(str, bits_to_focus_on_mask))
+    bits_to_focus_on_mask = bytearray([int("".join(sli), 2) for sli in zip_longest(*iter([it] * 8), fillvalue="")])
+
+    k_values = list(range(2, 10)) + [2048, 4096, 8192]
+    x_value_distributions = [0, 256, 512, 256+512]
 
 
     train(file_bytearray=file_bytearray,
-          fourier_series_terms=500,
-          #bits_predicted_per_neural_net_inference=1,
-          layer_cnt=3,
-          layer_size=1024,
+
+          bits_to_focus_on_mask=bits_to_focus_on_mask,
+          output_size=1024,
+          x_value_distributions=x_value_distributions,
+          k_values=k_values,
+
+          layer_cnt=0,
+          layer_size=0,
           epochs=500,
           learning_rate=0.00075,
           batch_size=512, # 8192
@@ -278,4 +279,3 @@ if __name__ == '__main__':
     """
     Compression Efficeny = Original size of file / (NN file size + 'missed bits table')
     """
-
